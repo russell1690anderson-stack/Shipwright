@@ -860,6 +860,17 @@ void OTRGlobals::Initialize() {
 #endif
     context->InitConfiguration();
     context->InitConsoleVariables();
+
+    // OOT recomp fork: on first launch, turn on 60 FPS interpolation and mouse controls.
+    // After that, whatever the player picks in the menus is kept.
+    if (!CVarGetInteger(CVAR_SETTING("ForkDefaultsApplied"), 0)) {
+        CVarSetInteger(CVAR_SETTING("ForkDefaultsApplied"), 1);
+        CVarSetInteger(CVAR_SETTING("InterpolationFPS"), 60);
+        CVarSetInteger(CVAR_SETTING("EnableMouse"), 1);
+        CVarSetInteger(CVAR_SETTING("AutoCaptureMouse"), 1);
+        CVarSetInteger(CVAR_SETTING("AltAssets"), 1); // use HD texture packs from the mods folder
+    }
+
     auto logLevel =
         static_cast<spdlog::level::level_enum>(CVarGetInteger(CVAR_DEVELOPER_TOOLS("LogLevel"), defaultLogLevel));
     context->InitLogging(logLevel, logLevel);

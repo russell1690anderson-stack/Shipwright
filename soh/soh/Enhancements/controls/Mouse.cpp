@@ -7,6 +7,12 @@
 #include "soh/Enhancements/game-interactor/GameInteractor.h"
 #include "soh/ShipInit.hpp"
 
+#include <cmath>
+#include <ship/controller/controldeck/ControlDeck.h>
+#include <ship/controller/controldevice/controller/mapping/mouse/MouseButtonToButtonMapping.h>
+#include <fast/Fast3dWindow.h>
+#include <ship/window/gui/Gui.h>
+
 extern "C" {
 #include "z64player.h"
 #include "functions.h"
@@ -16,10 +22,21 @@ extern "C" {
 static Ship::Coords mouseCoord = {};
 static Ship::Coords mouseCoordRel = {};
 
+// OOT recomp fork: mouse movement after acceleration and smoothing are applied.
+// The camera and first-person aiming read these instead of the raw delta.
+static f32 mouseRelX = 0.0f;
+static f32 mouseRelY = 0.0f;
+
 #define CVAR_ENABLE_MOUSE_NAME CVAR_SETTING("EnableMouse")
 #define CVAR_ENABLE_MOUSE_DEFAULT 0
 #define CVAR_ENABLE_MOUSE_VALUE CVarGetInteger(CVAR_ENABLE_MOUSE_NAME, CVAR_ENABLE_MOUSE_DEFAULT)
 #define MOUSE_ENABLED (CVAR_ENABLE_MOUSE_VALUE && GetWindow()->IsMouseCaptured())
+
+// OOT recomp fork settings
+#define CVAR_MOUSE_CAM_SENS_X_NAME CVAR_SETTING("Mouse.CameraSensitivity.X")
+#define CVAR_MOUSE_CAM_SENS_Y_NAME CVAR_SETTING("Mouse.CameraSensitivity.Y")
+#define CVAR_MOUSE_SMOOTHING_NAME CVAR_SETTING("Mouse.Smoothing")
+#define CVAR_MOUSE_ACCEL_NAME CVAR_SETTING("Mouse.Acceleration")
 
 std::shared_ptr<Ship::Window> GetWindow() {
     return OTRGlobals::Instance->context->GetWindow();
@@ -32,6 +49,37 @@ void Mouse_UpdatePos() {
 
 void Mouse_UpdatePosRel() {
     mouseCoordRel = GetWindow()->GetMouseDelta();
+
+    f32 rawX = static_cast<f32>(mouseCoordRel.x);
+    f32 rawY = static_cast<f32>(mouseCoordRel.y);
+
+    if (!MOUSE_ENABLED) {
+        mouseRelX = 0.0f;
+        mouseRelY = 0.0f;
+        return;
+    }
+
+    // Acceleration: faster mouse movement turns the camera proportionally further.
+    f32 accel = CVarGetFloat(CVAR_MOUSE_ACCEL_NAME, 0.0f);
+    if (accel > 0.0f) {
+        f32 speed = sqrtf(rawX * rawX + rawY * rawY);
+        f32 factor = 1.0f + accel * speed / 100.0f;
+        if (factor > 4.0f) {
+            factor = 4.0f;
+        }
+        rawX *= factor;
+        rawY *= factor;
+    }
+
+    // Smoothing: blend with the previous frame's movement to remove jitter.
+    f32 smoothing = CVarGetFloat(CVAR_MOUSE_SMOOTHING_NAME, 0.0f);
+    if (smoothing < 0.0f) {
+        smoothing = 0.0f;
+    } else if (smoothing > 0.9f) {
+        smoothing = 0.9f;
+    }
+    mouseRelX = mouseRelX * smoothing + rawX * (1.0f - smoothing);
+    mouseRelY = mouseRelY * smoothing + rawY * (1.0f - smoothing);
 }
 
 void Mouse_UpdateAll() {
@@ -41,8 +89,8 @@ void Mouse_UpdateAll() {
 
 void Mouse_HandleThirdPerson(f32* newCamX, f32* newCamY) {
     if (MOUSE_ENABLED && !CVarGetInteger(CVAR_SETTING("DisableThirdPersonMouse"), 0)) {
-        *newCamX -= mouseCoordRel.x * 40.0f;
-        *newCamY -= mouseCoordRel.y * 40.0f;
+        *newCamX -= mouseRelX * 40.0f * CVarGetFloat(CVAR_MOUSE_CAM_SENS_X_NAME, 1.0f);
+        *newCamY -= mouseRelY * 40.0f * CVarGetFloat(CVAR_MOUSE_CAM_SENS_Y_NAME, 1.0f);
     }
 }
 
@@ -57,8 +105,8 @@ void Mouse_HandleFirstPerson(Player* player) {
                               : 1;
     s8 invertYAxisMulti = CVarGetInteger(CVAR_SETTING("Controls.InvertAimingYAxis"), 1) ? -1 : 1;
     if (MOUSE_ENABLED) {
-        player->actor.focus.rot.y -= static_cast<int16_t>(mouseCoordRel.x * 6.0f * xAxisMulti * invertXAxisMulti);
-        player->actor.focus.rot.x += static_cast<int16_t>(mouseCoordRel.y * 6.0f * yAxisMulti * invertYAxisMulti);
+        player->actor.focus.rot.y -= static_cast<int16_t>(mouseRelX * 6.0f * xAxisMulti * invertXAxisMulti);
+        player->actor.focus.rot.x += static_cast<int16_t>(mouseRelY * 6.0f * yAxisMulti * invertYAxisMulti);
     }
 }
 
@@ -161,3 +209,51 @@ static RegisterShipInitFunc registerQuickspinCount(Mouse_RegisterUpdateQuickspin
 static RegisterShipInitFunc registerQuickspin(Mouse_RegisterHandleQuickspin, { CVAR_ENABLE_MOUSE_NAME });
 static RegisterShipInitFunc registerShieldMove(Mouse_RegisterHandleShield, { CVAR_ENABLE_MOUSE_NAME });
 } // extern "C"
+
+// OOT recomp fork: one-click "Modern PC Controls" preset.
+// Turns on mouse camera + aiming, binds mouse buttons and enables the options that make
+// mouse and keyboard play well. Keyboard bindings are left as they are.
+void Mouse_ApplyModernPcControls() {
+    // Mouse camera and aiming
+    CVarSetInteger(CVAR_ENABLE_MOUSE_NAME, 1);
+    CVarSetInteger(CVAR_SETTING("AutoCaptureMouse"), 1);
+    CVarSetInteger(CVAR_SETTING("DisableThirdPersonMouse"), 0);
+    CVarSetInteger(CVAR_SETTING("FreeLook.Enabled"), 1);   // the mouse only moves the camera with Free Look on
+    CVarSetInteger(CVAR_SETTING("A11yDisableIdleCam"), 1); // stop the camera swinging back behind Link
+    CVarSetInteger(CVAR_SETTING("DisableFirstPersonAutoCenterView"), 1);
+
+    // Aiming helpers
+    CVarSetInteger(CVAR_ENHANCEMENT("BowReticle"), 1);
+    CVarSetInteger(CVAR_ENHANCEMENT("BoomerangFirstPerson"), 1);
+    CVarSetInteger(CVAR_ENHANCEMENT("BoomerangReticle"), 1);
+
+    // Mouse buttons: left = sword (B), right = Z-target, middle = shield (R).
+    // Existing mouse bindings are replaced; keyboard and controller bindings are kept.
+    auto controller = Ship::Context::GetRawInstance()->GetControlDeck()->GetControllerByPort(0);
+    if (controller != nullptr) {
+        controller->ClearAllMappingsForDeviceType(Ship::PhysicalDeviceType::Mouse);
+        const std::pair<CONTROLLERBUTTONS_T, Ship::MouseBtn> binds[] = {
+            { BTN_B, Ship::LUS_MOUSE_BTN_LEFT },
+            { BTN_Z, Ship::LUS_MOUSE_BTN_RIGHT },
+            { BTN_R, Ship::LUS_MOUSE_BTN_MIDDLE },
+        };
+        for (const auto& [bitmask, mouseButton] : binds) {
+            auto button = controller->GetButton(bitmask);
+            if (button == nullptr) {
+                continue;
+            }
+            auto mapping = std::make_shared<Ship::MouseButtonToButtonMapping>(0, bitmask, mouseButton);
+            button->AddButtonMapping(mapping);
+            mapping->SaveToConfig();
+            button->SaveButtonMappingIdsToConfig();
+        }
+    }
+
+    auto wnd = std::dynamic_pointer_cast<Fast::Fast3dWindow>(GetWindow());
+    if (wnd != nullptr) {
+        wnd->SetAutoCaptureMouse(true);
+    }
+
+    ShipInit::InitAll();
+    GetWindow()->GetGui()->SaveConsoleVariablesNextFrame();
+}

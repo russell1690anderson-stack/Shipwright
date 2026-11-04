@@ -72,6 +72,29 @@ void AnchorMainMenu(WidgetInfo& info) {
     }
     ImGui::Spacing();
 
+    // OOT recomp fork: instanced items. Every player keeps their own items, chests, keys and
+    // story progress, while still seeing and playing alongside each other.
+    UIWidgets::CVarCheckbox(
+        "Instanced Items (each player keeps their own items)", CVAR_REMOTE_ANCHOR("InstancedItems"),
+        UIWidgets::CheckboxOptions()
+            .DefaultValue(true)
+            .Color(THEME_COLOR)
+            .Tooltip("On: every player has their own items, chests, keys, heart pieces and story progress. "
+                     "Opening a chest only gives the item to you, and it stays closed for everyone else until "
+                     "they open it themselves.\n"
+                     "Off: players on the same Team ID share items and flags, as in normal Anchor.\n"
+                     "Can't be changed while connected."));
+    UIWidgets::CVarCheckbox(
+        "Shared Boss Fights (Gohma)", CVAR_REMOTE_ANCHOR("SharedBossFights"),
+        UIWidgets::CheckboxOptions()
+            .DefaultValue(true)
+            .Color(THEME_COLOR)
+            .Tooltip("Experimental. Players in the same boss room share the boss's health: everyone's hits count, "
+                     "and when one player lands the final blow the boss is defeated for everyone in the room. "
+                     "The boss's movement and attacks are synced too, so everyone sees it in the same place.\n"
+                     "Everyone in the room needs this turned on. Currently only Queen Gohma."));
+    ImGui::Spacing();
+
     if (UIWidgets::Button("Restore Defaults", UIWidgets::ButtonOptions()
                                                   .Size(ImVec2(ImGui::GetContentRegionAvail().x / 2, 0))
                                                   .Color(UIWidgets::Colors::Red))) {
@@ -219,6 +242,14 @@ void AnchorInstructionsMenu(WidgetInfo& info) {
     auto anchor = Anchor::Instance;
 
     ImGui::SeparatorText("Usage Instructions");
+
+    // OOT recomp fork: quick start for normal (non-randomizer) co-op with instanced items
+    ImGui::TextWrapped("Playing the normal game together (Instanced Items on):");
+    ImGui::TextWrapped("- Everyone types the same Room ID and Host/Port, their own name, then clicks Enable.");
+    ImGui::TextWrapped("- Everyone loads their own save. Each player keeps their own items and progress, and you "
+                       "see each other in the world.");
+    ImGui::Spacing();
+    ImGui::TextWrapped("Randomizer with shared progress (Instanced Items off):");
 
     ImGui::TextWrapped("1. All players involved should start at the file select screen");
 

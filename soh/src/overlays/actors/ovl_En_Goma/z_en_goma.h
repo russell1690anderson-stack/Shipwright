@@ -77,4 +77,11 @@ typedef struct EnGoma {
     /* 0x358 */ ColliderCylinder colCyl2;
 } EnGoma; // size = 0x03A4
 
+// OOT recomp fork: syncing Queen Gohma's babies in online boss fights
+#include "soh/Network/Anchor/SharedBoss.h"
+void EnGoma_SyncCapture(struct EnGoma* goma, SharedBossMinion* minion);
+void EnGoma_SyncApply(struct EnGoma* goma, PlayState* play, const SharedBossMinion* minion);
+s32 EnGoma_SyncIsDying(struct EnGoma* goma);
+void EnGoma_SyncKill(struct EnGoma* goma);
+
 #endif

@@ -9,6 +9,7 @@
 #include "soh/SohGui/SohGui.hpp"
 #include "soh/cvar_prefixes.h"
 #include "soh/SohGui/UIWidgets.hpp"
+#include "Mouse.h"
 
 extern "C" {
 #include "z64.h"
@@ -1385,6 +1386,64 @@ void SohInputEditorWindow::DrawCameraControlPanel() {
     cursor = ImGui::GetCursorPos();
     ImGui::SetCursorPos(ImVec2(cursor.x + 5, cursor.y + 5));
     SohGui::mSohMenu->MenuDrawItem(mouseDisableThirdPerson, THEME_COLOR);
+
+    // OOT recomp fork: mouse feel options and the Modern PC Controls preset
+    cursor = ImGui::GetCursorPos();
+    ImGui::SetCursorPos(ImVec2(cursor.x + 5, cursor.y + 5));
+    Ship::GuiWindow::BeginGroupPanel("Mouse Feel", ImGui::GetContentRegionAvail());
+    if (UIWidgets::Button("Apply Modern PC Controls",
+                          ButtonOptions()
+                              .Color(THEME_COLOR)
+                              .Tooltip("One click setup for mouse and keyboard:\n"
+                                       "- Mouse moves the camera (turns on Free Look) and aims in first person\n"
+                                       "- Left click = Sword (B), Right click = Z-Target, Middle click = Shield (R)\n"
+                                       "- Turns off camera auto-recentering\n"
+                                       "- Turns on aiming reticles for the bow, slingshot and boomerang\n"
+                                       "Replaces your existing mouse button bindings. Keyboard and controller "
+                                       "bindings are kept."))) {
+        Mouse_ApplyModernPcControls();
+    }
+    CVarSliderFloat("Mouse Camera Horizontal Speed: %.0f %%", CVAR_SETTING("Mouse.CameraSensitivity.X"),
+                    FloatSliderOptions()
+                        .Color(THEME_COLOR)
+                        .IsPercentage()
+                        .Min(0.1f)
+                        .Max(5.0f)
+                        .DefaultValue(1.0f)
+                        .ShowButtons(true)
+                        .Tooltip("How fast the mouse turns the third-person camera left and right.\n"
+                                 "Only affects the mouse, not the right stick."));
+    CVarSliderFloat("Mouse Camera Vertical Speed: %.0f %%", CVAR_SETTING("Mouse.CameraSensitivity.Y"),
+                    FloatSliderOptions()
+                        .Color(THEME_COLOR)
+                        .IsPercentage()
+                        .Min(0.1f)
+                        .Max(5.0f)
+                        .DefaultValue(1.0f)
+                        .ShowButtons(true)
+                        .Tooltip("How fast the mouse moves the third-person camera up and down.\n"
+                                 "Only affects the mouse, not the right stick."));
+    CVarSliderFloat("Mouse Smoothing: %.0f %%", CVAR_SETTING("Mouse.Smoothing"),
+                    FloatSliderOptions()
+                        .Color(THEME_COLOR)
+                        .IsPercentage()
+                        .Min(0.0f)
+                        .Max(0.9f)
+                        .DefaultValue(0.0f)
+                        .ShowButtons(true)
+                        .Tooltip("Blends mouse movement over a few frames to remove jitter.\n"
+                                 "Higher values feel smoother but add a little delay. 0% = off."));
+    CVarSliderFloat("Mouse Acceleration: %.0f %%", CVAR_SETTING("Mouse.Acceleration"),
+                    FloatSliderOptions()
+                        .Color(THEME_COLOR)
+                        .IsPercentage()
+                        .Min(0.0f)
+                        .Max(2.0f)
+                        .DefaultValue(0.0f)
+                        .ShowButtons(true)
+                        .Tooltip("Fast mouse flicks turn further than slow movements.\n"
+                                 "Applies to the camera and first-person aiming. 0% = off."));
+    Ship::GuiWindow::EndGroupPanel(0);
 
     Ship::GuiWindow::BeginGroupPanel("Aiming/First-Person Camera", ImGui::GetContentRegionAvail());
     CVarCheckbox("Right Stick Aiming", CVAR_SETTING("Controls.RightStickAim"),

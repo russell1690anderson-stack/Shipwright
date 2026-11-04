@@ -66,6 +66,11 @@ void Anchor::SendPacket_PlayerUpdate() {
     payload["unk_862"] = player->unk_862;
     payload["unk_85C"] = player->unk_85C;
     payload["actionVar1"] = player->av1.actionVar1;
+    // OOT recomp fork: extra equipment info so other players see the right gear
+    payload["currentMask"] = player->currentMask;
+    payload["equipment"] = gSaveContext.equips.equipment;
+    payload["upgrades"] = gSaveContext.inventory.upgrades;
+    payload["swordHealth"] = gSaveContext.swordHealth;
     payload["quiet"] = true;
 
     for (auto& [clientId, client] : clients) {
@@ -113,5 +118,10 @@ void Anchor::HandlePacket_PlayerUpdate(nlohmann::json payload) {
         client.unk_862 = payload.value("unk_862", (s16)0);
         client.unk_85C = payload.value("unk_85C", (f32)0);
         client.actionVar1 = payload.value("actionVar1", (s8)0);
+        // OOT recomp fork
+        client.currentMask = payload.value("currentMask", (s8)0);
+        client.equipment = payload.value("equipment", (u16)0);
+        client.upgrades = payload.value("upgrades", (u32)0);
+        client.swordHealth = payload.value("swordHealth", (u16)8);
     }
 }

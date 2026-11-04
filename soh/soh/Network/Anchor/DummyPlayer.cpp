@@ -86,6 +86,9 @@ void DummyPlayer_Init(Actor* actor, PlayState* play) {
 
     gSaveContext.linkAge = originalAge;
 
+    // OOT recomp fork: make the first update build this player's hand/sheath models from their gear
+    client.appliedModelKey = 0;
+
     bool isGlobalRoom = (std::string("soh-global") == CVarGetString(CVAR_REMOTE_ANCHOR("RoomId"), ""));
 
     if (!isGlobalRoom) {
@@ -97,6 +100,46 @@ void Math_Vec3s_Copy(Vec3s* dest, Vec3s* src) {
     dest->x = src->x;
     dest->y = src->y;
     dest->z = src->z;
+}
+
+// OOT recomp fork: Player_SetModelGroup and Player_Draw read some of Link's equipment from
+// gSaveContext (this player's own save). Swap in the other player's values while their dummy
+// is being set up or drawn, then put ours back.
+struct DummySaveSwap {
+    s32 linkAge;
+    u8 buttonItem0;
+    u16 equipment;
+    u32 upgrades;
+    u16 swordHealth;
+};
+
+static DummySaveSwap DummyPlayer_SwapInSave(const AnchorClient& client) {
+    DummySaveSwap original = { gSaveContext.linkAge, gSaveContext.equips.buttonItems[0], gSaveContext.equips.equipment,
+                               gSaveContext.inventory.upgrades, gSaveContext.swordHealth };
+    gSaveContext.linkAge = client.linkAge;
+    gSaveContext.equips.buttonItems[0] = client.buttonItem0;
+    if (client.equipment != 0) {
+        gSaveContext.equips.equipment = client.equipment;
+    }
+    if (client.upgrades != 0) {
+        gSaveContext.inventory.upgrades = client.upgrades;
+    }
+    gSaveContext.swordHealth = client.swordHealth;
+    return original;
+}
+
+static void DummyPlayer_SwapOutSave(const DummySaveSwap& original) {
+    gSaveContext.linkAge = original.linkAge;
+    gSaveContext.equips.buttonItems[0] = original.buttonItem0;
+    gSaveContext.equips.equipment = original.equipment;
+    gSaveContext.inventory.upgrades = original.upgrades;
+    gSaveContext.swordHealth = original.swordHealth;
+}
+
+// Everything the hand/sheath/back models depend on, packed into one number
+static u32 DummyPlayer_ModelKey(const AnchorClient& client) {
+    return ((u32)client.modelGroup) | ((u32)(u8)client.currentShield << 8) | ((u32)client.buttonItem0 << 16) |
+           ((u32)(client.linkAge & 1) << 24) | ((u32)(client.swordHealth == 0) << 25) | (1u << 31);
 }
 
 // Update the actor with new data from the client
@@ -131,6 +174,7 @@ void DummyPlayer_Update(Actor* actor, PlayState* play) {
     player->currentShield = client.currentShield;
     player->heldItemId = client.buttonItem0;
     player->currentTunic = client.currentTunic;
+    player->currentMask = client.currentMask; // OOT recomp fork: masks show on other players
     player->stateFlags1 = client.stateFlags1;
     player->stateFlags2 = client.stateFlags2;
     player->itemAction = client.itemAction;
@@ -163,15 +207,14 @@ void DummyPlayer_Update(Actor* actor, PlayState* play) {
         player->actor.world.pos.y += diff.y * player->actor.scale.y;
     }
 
-    if (player->modelGroup != client.modelGroup) {
-        // Hack to account for usage of gSaveContext
-        s32 originalAge = gSaveContext.linkAge;
-        gSaveContext.linkAge = client.linkAge;
-        u8 originalButtonItem0 = gSaveContext.equips.buttonItems[0];
-        gSaveContext.equips.buttonItems[0] = client.buttonItem0;
+    // OOT recomp fork: rebuild the hand/sheath/back models whenever anything they depend on changes
+    // (not just the model group), so a new sword or shield shows up straight away
+    u32 modelKey = DummyPlayer_ModelKey(client);
+    if (player->modelGroup != client.modelGroup || client.appliedModelKey != modelKey) {
+        DummySaveSwap original = DummyPlayer_SwapInSave(client);
         Player_SetModelGroup(player, client.modelGroup);
-        gSaveContext.linkAge = originalAge;
-        gSaveContext.equips.buttonItems[0] = originalButtonItem0;
+        DummyPlayer_SwapOutSave(original);
+        client.appliedModelKey = modelKey;
     }
 
     if (Anchor::Instance->roomState.pvpMode == 0 ||
@@ -237,14 +280,10 @@ void DummyPlayer_Draw(Actor* actor, PlayState* play) {
     }
 
     // Hack to account for usage of gSaveContext in Player_Draw
-    s32 originalAge = gSaveContext.linkAge;
-    gSaveContext.linkAge = client.linkAge;
-    u8 originalButtonItem0 = gSaveContext.equips.buttonItems[0];
-    gSaveContext.equips.buttonItems[0] = client.buttonItem0;
-
+    // (OOT recomp fork: also swaps equipment, upgrades and Giant's Knife health)
+    DummySaveSwap original = DummyPlayer_SwapInSave(client);
     Player_Draw((Actor*)player, play);
-    gSaveContext.linkAge = originalAge;
-    gSaveContext.equips.buttonItems[0] = originalButtonItem0;
+    DummyPlayer_SwapOutSave(original);
 }
 
 void DummyPlayer_Destroy(Actor* actor, PlayState* play) {

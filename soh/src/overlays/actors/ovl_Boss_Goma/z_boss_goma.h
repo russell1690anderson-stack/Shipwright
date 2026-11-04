@@ -6,6 +6,8 @@
 
 struct BossGoma;
 
+#define BOSSGOMA_MAX_CHILDREN 12 // OOT recomp fork (originally 3)
+
 typedef void (*BossGomaActionFunc)(struct BossGoma*, PlayState*);
 
 typedef enum {
@@ -102,7 +104,7 @@ typedef struct BossGoma {
     /* 0x0000 */ Actor actor;
     /* 0x014C */ SkelAnime skelanime;
     /* 0x0190 */ BossGomaActionFunc actionFunc;
-    /* 0x0194 */ s16 frameCount; // also used as a timer
+    /* 0x0194 */ s16 frameCount;    // also used as a timer
     /* 0x0196 */ s16 patienceTimer; // when non-0: walk towards player, can be stunned
     /* 0x0198 */ s16 eyeLidBottomRotX;
     /* 0x019A */ s16 eyeLidTopRotX;
@@ -110,7 +112,10 @@ typedef struct BossGoma {
     /* 0x019E */ s16 eyeIrisRotX;
     /* 0x01A0 */ s16 eyeIrisRotY;
     /* 0x01A2 */ s16 unusedTimer;
-    /* 0x01A4 */ s16 childrenGohmaState[3]; // 0 not spawned, 1 spawned, -1 dead (-1 set by child gohma)
+    // OOT recomp fork: up to BOSSGOMA_MAX_CHILDREN babies (3 per player in online boss fights),
+    // so the offsets below no longer match the original game.
+    /* 0x01A4 */ s16
+        childrenGohmaState[BOSSGOMA_MAX_CHILDREN]; // 0 not spawned, 1 spawned, -1 dead (-1 set by child gohma)
     /* 0x01AA */ s16 tailLimbsScaleTimers[4];
     /* 0x01B2 */ s16 spawnGohmasActionTimer;
     /* 0x01B4 */ s16 eyeState;
@@ -148,9 +153,16 @@ typedef struct BossGoma {
     /* 0x0290 */ Vec3f subCameraEye;
     /* 0x029C */ Vec3f subCameraAt;
     /* 0x02A8 */ Vec3f defeatedLimbPositions[100]; // only 85/86 first indices actually used
-    /* 0x0758 */ u8 deadLimbsState[100]; // only 85/90 first indices actually used
+    /* 0x0758 */ u8 deadLimbsState[100];           // only 85/90 first indices actually used
     /* 0x07BC */ ColliderJntSph collider;
     /* 0x07DC */ ColliderJntSphElement colliderItems[13];
-} BossGoma; // size = 0x0B1C
+    // OOT recomp fork
+    s16 childGohmaCount;                       // babies per wave: 3, or 3 per player online
+    Actor* childActors[BOSSGOMA_MAX_CHILDREN]; // the spawned babies, to find a baby's slot
+    s16 isSyncFollower;                        // another player's game is leading this fight
+} BossGoma;                                    // size = 0x0B1C
+
+// OOT recomp fork: called by a baby Gohma when it dies
+void BossGoma_OnChildDied(struct BossGoma* boss, Actor* child);
 
 #endif

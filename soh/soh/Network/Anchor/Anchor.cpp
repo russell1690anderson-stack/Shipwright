@@ -129,6 +129,12 @@ void Anchor::ProcessIncomingPacketQueue() {
             // packetType here is a string so we can't use a switch statement
             if (packetType == ALL_CLIENT_STATE)
                 HandlePacket_AllClientState(payload);
+            else if (packetType == BOSS_HEALTH)
+                HandlePacket_BossHealth(payload);
+            else if (packetType == BOSS_STATE)
+                HandlePacket_BossState(payload);
+            else if (packetType == BOSS_MINION_KILLED)
+                HandlePacket_BossMinionKilled(payload);
             else if (packetType == DAMAGE_PLAYER)
                 HandlePacket_DamagePlayer(payload);
             else if (packetType == DISABLE_ANCHOR)
@@ -226,6 +232,13 @@ void Anchor::RefreshClientActors() {
         client.player = (Player*)dummy;
     }
     spawningDummyPlayerForClientId = 0;
+}
+
+bool Anchor::ShouldSyncItemsAndFlags() {
+    if (CVarGetInteger(CVAR_REMOTE_ANCHOR("InstancedItems"), 1)) {
+        return false;
+    }
+    return roomState.syncItemsAndFlags;
 }
 
 bool Anchor::IsSaveLoaded() {

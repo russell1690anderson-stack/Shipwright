@@ -5,6 +5,12 @@
 #include "overlays/effects/ovl_Effect_Ss_Hahen/z_eff_ss_hahen.h"
 #include "soh/Enhancements/game-interactor/GameInteractor_Hooks.h"
 #include "soh/Enhancements/savestate_serialize.h"
+#include "soh/Network/Anchor/SharedBoss.h"
+
+// OOT recomp fork: in online boss fights babies go after the nearest player, not just this one
+static Actor* EnGoma_GetTarget(struct EnGoma* this, PlayState* play) {
+    return SharedBoss_GetTargetActor(play, &this->actor);
+}
 
 #define FLAGS                                                                                 \
     (ACTOR_FLAG_ATTENTION_ENABLED | ACTOR_FLAG_HOSTILE | ACTOR_FLAG_UPDATE_CULLING_DISABLED | \
@@ -204,8 +210,8 @@ void EnGoma_SetupFlee(EnGoma* this) {
 void EnGoma_Flee(EnGoma* this, PlayState* play) {
     SkelAnime_Update(&this->skelanime);
     Math_ApproachF(&this->actor.speedXZ, 20.0f / 3.0f, 0.5f, 2.0f);
-    Math_ApproachS(&this->actor.world.rot.y, Actor_WorldYawTowardActor(&this->actor, &GET_PLAYER(play)->actor) + 0x8000,
-                   3, 2000);
+    Math_ApproachS(&this->actor.world.rot.y,
+                   Actor_WorldYawTowardActor(&this->actor, EnGoma_GetTarget(this, play)) + 0x8000, 3, 2000);
     Math_ApproachS(&this->actor.shape.rot.y, this->actor.world.rot.y, 2, 3000);
 
     if (this->actionTimer == 0) {
@@ -276,13 +282,13 @@ void EnGoma_EggFallToGround(EnGoma* this, PlayState* play) {
 }
 
 void EnGoma_Egg(EnGoma* this, PlayState* play) {
-    Player* player = GET_PLAYER(play);
+    Actor* target = EnGoma_GetTarget(this, play); // OOT recomp fork: nearest player
     s32 i;
 
     this->eggSquishAngle += 1.0f;
     Math_ApproachF(&this->eggSquishAmount, 0.1f, 1.0f, 0.005f);
-    if (fabsf(this->actor.world.pos.x - player->actor.world.pos.x) < 100.0f &&
-        fabsf(this->actor.world.pos.z - player->actor.world.pos.z) < 100.0f) {
+    if (fabsf(this->actor.world.pos.x - target->world.pos.x) < 100.0f &&
+        fabsf(this->actor.world.pos.z - target->world.pos.z) < 100.0f) {
         if (++this->playerDetectionTimer > 9) {
             this->actionFunc = EnGoma_EggFallToGround;
         }
@@ -312,7 +318,7 @@ void EnGoma_SetupHatch(EnGoma* this, PlayState* play) {
     Actor_SetScale(&this->actor, 0.005f);
     this->gomaType = ENGOMA_NORMAL;
     this->actionTimer = 5;
-    this->actor.shape.rot.y = Actor_WorldYawTowardActor(&this->actor, &GET_PLAYER(play)->actor);
+    this->actor.shape.rot.y = Actor_WorldYawTowardActor(&this->actor, EnGoma_GetTarget(this, play));
     this->actor.world.rot.y = this->actor.shape.rot.y;
     EnGoma_SpawnHatchDebris(this, play);
     this->eggScale = 1.0f;
@@ -425,9 +431,8 @@ void EnGoma_Dead(EnGoma* this, PlayState* play) {
 
     if (this->actionTimer == 0 && Math_SmoothStepToF(&this->actor.scale.y, 0.0f, 0.5f, 0.00225f, 0.00001f) <= 0.001f) {
         if (this->actor.params < 6) {
-            BossGoma* parent = (BossGoma*)this->actor.parent;
-
-            parent->childrenGohmaState[this->actor.params] = -1;
+            // OOT recomp fork: the boss can have more than 3 babies, so let it find the right slot
+            BossGoma_OnChildDied((BossGoma*)this->actor.parent, &this->actor);
         }
         Audio_PlaySfxGeneral(NA_SE_EN_EXTINCT, &this->actor.projectedPos, 4, &gSfxDefaultFreqAndVolScale,
                              &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
@@ -467,7 +472,7 @@ void EnGoma_PrepareJump(EnGoma* this, PlayState* play) {
     SkelAnime_Update(&this->skelanime);
     Math_ApproachZeroF(&this->actor.speedXZ, 0.5f, 2.0f);
 
-    targetAngle = Actor_WorldYawTowardActor(&this->actor, &GET_PLAYER(play)->actor);
+    targetAngle = Actor_WorldYawTowardActor(&this->actor, EnGoma_GetTarget(this, play));
     Math_ApproachS(&this->actor.world.rot.y, targetAngle, 2, 4000);
     Math_ApproachS(&this->actor.shape.rot.y, targetAngle, 2, 3000);
 
@@ -527,7 +532,7 @@ void EnGoma_Jump(EnGoma* this, PlayState* play) {
 void EnGoma_Stand(EnGoma* this, PlayState* play) {
     SkelAnime_Update(&this->skelanime);
     Math_ApproachZeroF(&this->actor.speedXZ, 0.5f, 2.0f);
-    Math_ApproachS(&this->actor.shape.rot.y, Actor_WorldYawTowardActor(&this->actor, &GET_PLAYER(play)->actor), 2,
+    Math_ApproachS(&this->actor.shape.rot.y, Actor_WorldYawTowardActor(&this->actor, EnGoma_GetTarget(this, play)), 2,
                    3000);
 
     if (this->actionTimer == 0) {
@@ -547,13 +552,14 @@ void EnGoma_ChasePlayer(EnGoma* this, PlayState* play) {
     }
 
     Math_ApproachF(&this->actor.speedXZ, 10.0f / 3.0f, 0.5f, 2.0f);
-    Math_ApproachS(&this->actor.world.rot.y, this->actor.yawTowardsPlayer, 3, 2000);
+    Math_ApproachS(&this->actor.world.rot.y, Actor_WorldYawTowardActor(&this->actor, EnGoma_GetTarget(this, play)), 3,
+                   2000);
     Math_ApproachS(&this->actor.shape.rot.y, this->actor.world.rot.y, 2, 3000);
 
     if (this->actor.bgCheckFlags & BGCHECKFLAG_GROUND) {
         this->actor.velocity.y = 0.0f;
     }
-    if (this->actor.xzDistToPlayer <= 150.0f) {
+    if (Actor_WorldDistXZToActor(&this->actor, EnGoma_GetTarget(this, play)) <= 150.0f) {
         EnGoma_SetupPrepareJump(this);
     }
 }
@@ -601,8 +607,8 @@ void EnGoma_LookAtPlayer(EnGoma* this, PlayState* play) {
     s16 eyePitch;
     s16 eyeYaw;
 
-    eyeYaw = Actor_WorldYawTowardActor(&this->actor, &GET_PLAYER(play)->actor) - this->actor.shape.rot.y;
-    eyePitch = Actor_WorldPitchTowardActor(&this->actor, &GET_PLAYER(play)->actor) - this->actor.shape.rot.x;
+    eyeYaw = Actor_WorldYawTowardActor(&this->actor, EnGoma_GetTarget(this, play)) - this->actor.shape.rot.y;
+    eyePitch = Actor_WorldPitchTowardActor(&this->actor, EnGoma_GetTarget(this, play)) - this->actor.shape.rot.x;
 
     if (eyeYaw > 6000) {
         eyeYaw = 6000;
@@ -668,10 +674,9 @@ void EnGoma_UpdateHit(EnGoma* this, PlayState* play) {
                 }
             } else {
                 // die if still an egg
-                if (this->actor.params <= 5) { //! BossGoma only has 3 children
-                    BossGoma* parent = (BossGoma*)this->actor.parent;
-
-                    parent->childrenGohmaState[this->actor.params] = -1;
+                if (this->actor.params <= 5) {
+                    // OOT recomp fork: the boss can have more than 3 babies, so let it find the right slot
+                    BossGoma_OnChildDied((BossGoma*)this->actor.parent, &this->actor);
                 }
 
                 EnGoma_SpawnHatchDebris(this, play);
@@ -914,4 +919,122 @@ void EnGoma_BossLimb(EnGoma* this, PlayState* play) {
 
 void EnGoma_Reset(void) {
     sSpawnNum = 0;
+}
+// OOT recomp fork: syncing Queen Gohma's babies in online boss fights.
+// Each state is identified by its index in this table so it means the same thing on every
+// player's game. Hurt/Die/Dead aren't synced: hits are local, and deaths are sent separately.
+typedef enum {
+    ENGOMA_SYNC_EGG_FALL,
+    ENGOMA_SYNC_EGG,
+    ENGOMA_SYNC_HATCH,
+    ENGOMA_SYNC_STAND,
+    ENGOMA_SYNC_CHASE,
+    ENGOMA_SYNC_PREPARE_JUMP,
+    ENGOMA_SYNC_JUMP,
+    ENGOMA_SYNC_LAND,
+    ENGOMA_SYNC_STUNNED,
+    ENGOMA_SYNC_FLEE,
+    ENGOMA_SYNC_MAX
+} EnGomaSyncAction;
+
+static const EnGomaActionFunc sEnGomaSyncActions[ENGOMA_SYNC_MAX] = {
+    EnGoma_EggFallToGround, EnGoma_Egg,  EnGoma_Hatch, EnGoma_Stand,   EnGoma_ChasePlayer,
+    EnGoma_PrepareJump,     EnGoma_Jump, EnGoma_Land,  EnGoma_Stunned, EnGoma_Flee,
+};
+
+static s16 EnGoma_GetSyncAction(EnGoma* this) {
+    s16 i;
+
+    for (i = 0; i < ENGOMA_SYNC_MAX; i++) {
+        if (sEnGomaSyncActions[i] == this->actionFunc) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static s32 EnGoma_IsEggAction(s16 action) {
+    return action == ENGOMA_SYNC_EGG_FALL || action == ENGOMA_SYNC_EGG;
+}
+
+s32 EnGoma_SyncIsDying(EnGoma* this) {
+    return this->actionFunc == EnGoma_Die || this->actionFunc == EnGoma_Dead ||
+           ((s8)this->actor.colChkInfo.health <= 0 && this->actionFunc == EnGoma_Hurt);
+}
+
+void EnGoma_SyncKill(EnGoma* this) {
+    if (EnGoma_SyncIsDying(this)) {
+        return;
+    }
+    this->actor.colChkInfo.health = 0;
+    EnGoma_SetupDie(this);
+}
+
+void EnGoma_SyncCapture(EnGoma* this, SharedBossMinion* minion) {
+    minion->action = EnGoma_GetSyncAction(this);
+    minion->timer = this->actionTimer;
+    minion->pos[0] = this->actor.world.pos.x;
+    minion->pos[1] = this->actor.world.pos.y;
+    minion->pos[2] = this->actor.world.pos.z;
+    minion->rotY = this->actor.world.rot.y;
+    minion->shapeRotY = this->actor.shape.rot.y;
+    minion->speedXZ = this->actor.speedXZ;
+    minion->velocityY = this->actor.velocity.y;
+}
+
+void EnGoma_SyncApply(EnGoma* this, PlayState* play, const SharedBossMinion* minion) {
+    s16 local = EnGoma_GetSyncAction(this);
+    s16 target = minion->action;
+
+    // Let local hit reactions and deaths play out; they aren't driven by the leader
+    if (local < 0 || target < 0 || target >= ENGOMA_SYNC_MAX) {
+        return;
+    }
+
+    if (target != local) {
+        if (EnGoma_IsEggAction(local) && !EnGoma_IsEggAction(target)) {
+            // The leader's egg has hatched: hatch ours too (plays the shell-breaking effect)
+            EnGoma_SetupHatch(this, play);
+        }
+        switch (target) {
+            case ENGOMA_SYNC_EGG_FALL:
+                this->actionFunc = EnGoma_EggFallToGround;
+                break;
+            case ENGOMA_SYNC_EGG:
+                this->actionFunc = EnGoma_Egg;
+                break;
+            case ENGOMA_SYNC_HATCH:
+                break; // already set up above
+            case ENGOMA_SYNC_STAND:
+                EnGoma_SetupStand(this);
+                break;
+            case ENGOMA_SYNC_CHASE:
+                EnGoma_SetupChasePlayer(this);
+                break;
+            case ENGOMA_SYNC_PREPARE_JUMP:
+                EnGoma_SetupPrepareJump(this);
+                break;
+            case ENGOMA_SYNC_JUMP:
+                EnGoma_SetupJump(this);
+                break;
+            case ENGOMA_SYNC_LAND:
+                EnGoma_SetupLand(this);
+                break;
+            case ENGOMA_SYNC_STUNNED:
+                EnGoma_SetupStunned(this, play);
+                break;
+            case ENGOMA_SYNC_FLEE:
+                EnGoma_SetupFlee(this);
+                break;
+        }
+    }
+
+    this->actionTimer = minion->timer;
+    this->actor.world.pos.x = minion->pos[0];
+    this->actor.world.pos.y = minion->pos[1];
+    this->actor.world.pos.z = minion->pos[2];
+    this->actor.world.rot.y = minion->rotY;
+    this->actor.shape.rot.y = minion->shapeRotY;
+    this->actor.speedXZ = minion->speedXZ;
+    this->actor.velocity.y = minion->velocityY;
 }

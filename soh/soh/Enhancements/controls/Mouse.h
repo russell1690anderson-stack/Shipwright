@@ -16,4 +16,7 @@ bool Mouse_HandleQuickspin(bool* should, s8* iter2, s8* sp3C);
 void Mouse_UpdateQuickspinCount();
 #ifdef __cplusplus
 }; // extern "C"
+
+// OOT recomp fork
+void Mouse_ApplyModernPcControls();
 #endif

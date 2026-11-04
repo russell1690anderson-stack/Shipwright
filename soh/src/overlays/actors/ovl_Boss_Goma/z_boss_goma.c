@@ -7,6 +7,12 @@
 #include "soh/OTRGlobals.h"
 #include "soh/Enhancements/game-interactor/GameInteractor_Hooks.h"
 #include <libultraship/bridge/consolevariablebridge.h>
+#include "soh/Network/Anchor/SharedBoss.h" // OOT recomp fork: shared boss fights
+
+// OOT recomp fork: in online boss fights Gohma goes after the nearest player, not just this one
+static Actor* BossGoma_GetTarget(struct BossGoma* this, PlayState* play) {
+    return SharedBoss_GetTargetActor(play, &this->actor);
+}
 
 #define FLAGS                                                                                 \
     (ACTOR_FLAG_ATTENTION_ENABLED | ACTOR_FLAG_HOSTILE | ACTOR_FLAG_UPDATE_CULLING_DISABLED | \
@@ -337,6 +343,14 @@ void BossGoma_Init(Actor* thisx, PlayState* play) {
     this->actor.gravity = 0.0f;
     BossGoma_SetupEncounter(this, play);
     this->actor.colChkInfo.health = 10;
+    SharedBoss_Reset(&this->actor); // OOT recomp fork
+    // OOT recomp fork: baby Gohma bookkeeping
+    this->childGohmaCount = 3;
+    this->isSyncFollower = false;
+    for (s16 i = 0; i < BOSSGOMA_MAX_CHILDREN; i++) {
+        this->childrenGohmaState[i] = 0;
+        this->childActors[i] = NULL;
+    }
     this->actor.colChkInfo.mass = MASS_IMMOVABLE;
     Collider_InitJntSph(play, &this->collider);
     Collider_SetJntSph(play, &this->collider, &this->actor, &sColliderJntSphInit, this->colliderItems);
@@ -391,6 +405,62 @@ void BossGoma_Destroy(Actor* thisx, PlayState* play) {
 
     SkelAnime_Free(&this->skelanime, play);
     Collider_DestroyJntSph(play, &this->collider);
+
+    // OOT recomp fork: babies outliving Gohma must not point at freed memory
+    for (s16 i = 0; i < BOSSGOMA_MAX_CHILDREN; i++) {
+        if (this->childActors[i] != NULL) {
+            this->childActors[i]->parent = NULL;
+            this->childActors[i] = NULL;
+        }
+    }
+}
+
+// OOT recomp fork: baby Gohma helpers (there can be up to 3 per player in online boss fights)
+static void BossGoma_ResetChildren(BossGoma* this) {
+    for (s16 i = 0; i < BOSSGOMA_MAX_CHILDREN; i++) {
+        this->childrenGohmaState[i] = 0;
+    }
+}
+
+static s32 BossGoma_AllChildrenInState(BossGoma* this, s16 state) {
+    for (s16 i = 0; i < this->childGohmaCount; i++) {
+        if (state < 0 ? this->childrenGohmaState[i] >= 0 : this->childrenGohmaState[i] != state) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static s32 BossGoma_AnyChildUnspawned(BossGoma* this) {
+    for (s16 i = 0; i < this->childGohmaCount; i++) {
+        if (this->childrenGohmaState[i] == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static s32 BossGoma_AnyChildAlive(BossGoma* this) {
+    for (s16 i = 0; i < BOSSGOMA_MAX_CHILDREN; i++) {
+        if (this->childrenGohmaState[i] > 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void BossGoma_OnChildDied(BossGoma* this, Actor* child) {
+    if (this == NULL) {
+        return;
+    }
+    for (s16 i = 0; i < BOSSGOMA_MAX_CHILDREN; i++) {
+        if (this->childActors[i] == child) {
+            this->childrenGohmaState[i] = -1;
+            this->childActors[i] = NULL;
+            SharedBoss_SendMinionKilled(&this->actor, i);
+            return;
+        }
+    }
 }
 
 /**
@@ -454,7 +524,7 @@ void BossGoma_SetupFallJump(BossGoma* this) {
     // When in Enemy Randomizer, reset the state of the spawned Gohma Larva because it's not done
     // by the (non-existent) Larva themselves.
     if (CVarGetInteger(CVAR_ENHANCEMENT("RandomizedEnemies"), 0)) {
-        this->childrenGohmaState[0] = this->childrenGohmaState[1] = this->childrenGohmaState[2] = 0;
+        BossGoma_ResetChildren(this); // OOT recomp fork
     }
     Animation_Change(&this->skelanime, &gGohmaLandAnim, 1.0f, 0.0f, 0.0f, ANIMMODE_ONCE, -5.0f);
     this->actionFunc = BossGoma_FallJump;
@@ -1269,12 +1339,12 @@ void BossGoma_FloorAttackPosture(BossGoma* this, PlayState* play) {
     Math_ApproachZeroF(&this->actor.speedXZ, 0.5f, 2.0f);
 
     if (this->skelanime.curFrame >= (19.0f + 1.0f / 3.0f) && this->skelanime.curFrame <= 30.0f) {
-        Math_ApproachS(&this->actor.world.rot.y, Actor_WorldYawTowardActor(&this->actor, &GET_PLAYER(play)->actor), 3,
-                       0xBB8);
+        Math_ApproachS(&this->actor.world.rot.y,
+                       Actor_WorldYawTowardActor(&this->actor, BossGoma_GetTarget(this, play)), 3, 0xBB8);
     }
 
     if (Animation_OnFrame(&this->skelanime, Animation_GetLastFrame(&gGohmaPrepareAttackAnim))) {
-        if (this->actor.xzDistToPlayer < 250.0f) {
+        if (Actor_WorldDistXZToActor(&this->actor, BossGoma_GetTarget(this, play)) < 250.0f) {
             BossGoma_SetupFloorPrepareAttack(this);
         } else {
             BossGoma_SetupFloorMain(this);
@@ -1421,7 +1491,8 @@ void BossGoma_FloorStunned(BossGoma* this, PlayState* play) {
 
     if (this->framesUntilNextAction == 0) {
         BossGoma_SetupFloorMain(this);
-        if (this->patienceTimer == 0 && this->actor.xzDistToPlayer < 130.0f) {
+        if (this->patienceTimer == 0 &&
+            Actor_WorldDistXZToActor(&this->actor, BossGoma_GetTarget(this, play)) < 130.0f) {
             this->timer = 20;
         }
     }
@@ -1438,7 +1509,7 @@ void BossGoma_FloorStunned(BossGoma* this, PlayState* play) {
 void BossGoma_FallJump(BossGoma* this, PlayState* play) {
     SkelAnime_Update(&this->skelanime);
     Math_ApproachS(&this->actor.shape.rot.x, 0, 2, 0xBB8);
-    Math_ApproachS(&this->actor.world.rot.y, Actor_WorldYawTowardActor(&this->actor, &GET_PLAYER(play)->actor), 2,
+    Math_ApproachS(&this->actor.world.rot.y, Actor_WorldYawTowardActor(&this->actor, BossGoma_GetTarget(this, play)), 2,
                    0x7D0);
 
     if (this->actor.bgCheckFlags & BGCHECKFLAG_GROUND) {
@@ -1455,7 +1526,7 @@ void BossGoma_FallJump(BossGoma* this, PlayState* play) {
 void BossGoma_FallStruckDown(BossGoma* this, PlayState* play) {
     SkelAnime_Update(&this->skelanime);
     Math_ApproachS(&this->actor.shape.rot.x, 0, 2, 0xBB8);
-    Math_ApproachS(&this->actor.world.rot.y, Actor_WorldYawTowardActor(&this->actor, &GET_PLAYER(play)->actor), 3,
+    Math_ApproachS(&this->actor.world.rot.y, Actor_WorldYawTowardActor(&this->actor, BossGoma_GetTarget(this, play)), 3,
                    0x7D0);
 
     if (this->actor.bgCheckFlags & BGCHECKFLAG_GROUND) {
@@ -1501,15 +1572,16 @@ void BossGoma_CeilingSpawnGohmas(BossGoma* this, PlayState* play) {
             break;
     }
 
-    if (this->tailLimbsScaleTimers[0] == 2) {
-        for (i = 0; i < ARRAY_COUNT(this->childrenGohmaState); i++) {
+    // OOT recomp fork: when another player's game leads the fight, their babies are copied instead
+    if (this->tailLimbsScaleTimers[0] == 2 && !this->isSyncFollower) {
+        for (i = 0; i < this->childGohmaCount; i++) {
             if (this->childrenGohmaState[i] == 0) {
                 BossGoma_SpawnChildGohma(this, play, i);
                 break;
             }
         }
 
-        if (this->childrenGohmaState[0] == 0 || this->childrenGohmaState[1] == 0 || this->childrenGohmaState[2] == 0) {
+        if (BossGoma_AnyChildUnspawned(this)) {
             this->spawnGohmasActionTimer = 23;
         }
     }
@@ -1565,17 +1637,20 @@ void BossGoma_CeilingIdle(BossGoma* this, PlayState* play) {
         if (CVarGetInteger(CVAR_ENHANCEMENT("RandomizedEnemies"), 0)) {
             nearbyEnTest = Actor_FindNearby(play, &this->actor, -1, ACTORCAT_ENEMY, 8000.0f);
         }
-        if (this->childrenGohmaState[0] == 0 && this->childrenGohmaState[1] == 0 && this->childrenGohmaState[2] == 0) {
+        if (BossGoma_AllChildrenInState(this, 0)) {
             // if no child gohma has been spawned
+            // OOT recomp fork: 3 babies per player in the fight (up to BOSSGOMA_MAX_CHILDREN)
+            if (!this->isSyncFollower) {
+                this->childGohmaCount = CLAMP(3 * SharedBoss_GetPlayerCount(&this->actor), 3, BOSSGOMA_MAX_CHILDREN);
+            }
             BossGoma_SetupCeilingPrepareSpawnGohmas(this);
-        } else if ((this->childrenGohmaState[0] < 0 && this->childrenGohmaState[1] < 0 &&
-                    this->childrenGohmaState[2] < 0) ||
+        } else if (BossGoma_AllChildrenInState(this, -1) ||
                    (nearbyEnTest == NULL && CVarGetInteger(CVAR_ENHANCEMENT("RandomizedEnemies"), 0))) {
             // In authentic gameplay, check if all baby Ghomas are dead. In Enemy Randomizer, check if there's no
             // enemies alive.
             BossGoma_SetupFallJump(this);
         } else {
-            for (i = 0; i < ARRAY_COUNT(this->childrenGohmaState); i++) {
+            for (i = 0; i < this->childGohmaCount; i++) {
                 if (this->childrenGohmaState[i] == 0) {
                     // if any child gohma hasn't been spawned
                     // this seems unreachable since BossGoma_CeilingSpawnGohmas spawns all three and can't be
@@ -1621,12 +1696,12 @@ void BossGoma_FloorMain(BossGoma* this, PlayState* play) {
     }
 
     if (!this->doNotMoveThisFrame) {
-        rot = Actor_WorldYawTowardActor(&this->actor, &GET_PLAYER(play)->actor);
+        rot = Actor_WorldYawTowardActor(&this->actor, BossGoma_GetTarget(this, play));
 
         if (this->patienceTimer != 0) {
             this->patienceTimer--;
 
-            if (this->actor.xzDistToPlayer < 150.0f) {
+            if (Actor_WorldDistXZToActor(&this->actor, BossGoma_GetTarget(this, play)) < 150.0f) {
                 BossGoma_SetupFloorAttackPosture(this);
             }
 
@@ -1682,7 +1757,7 @@ void BossGoma_WallClimb(BossGoma* this, PlayState* play) {
     if (this->actor.world.pos.y > -320.0f) {
         BossGoma_SetupCeilingMoveToCenter(this);
         // allow new spawns
-        this->childrenGohmaState[0] = this->childrenGohmaState[1] = this->childrenGohmaState[2] = 0;
+        BossGoma_ResetChildren(this); // OOT recomp fork
     }
 }
 
@@ -1749,7 +1824,7 @@ void BossGoma_UpdateEye(BossGoma* this, PlayState* play) {
             }
         }
 
-        if (this->childrenGohmaState[0] > 0 || this->childrenGohmaState[1] > 0 || this->childrenGohmaState[2] > 0) {
+        if (BossGoma_AnyChildAlive(this)) {
             this->eyeClosedTimer = 7;
         }
 
@@ -1766,9 +1841,9 @@ void BossGoma_UpdateEye(BossGoma* this, PlayState* play) {
 
         if (this->eyeState != EYESTATE_IRIS_NO_FOLLOW_NO_IFRAMES) {
             targetEyeIrisRotY =
-                Actor_WorldYawTowardActor(&this->actor, &GET_PLAYER(play)->actor) - this->actor.shape.rot.y;
+                Actor_WorldYawTowardActor(&this->actor, BossGoma_GetTarget(this, play)) - this->actor.shape.rot.y;
             targetEyeIrisRotX =
-                Actor_WorldPitchTowardActor(&this->actor, &GET_PLAYER(play)->actor) - this->actor.shape.rot.x;
+                Actor_WorldPitchTowardActor(&this->actor, BossGoma_GetTarget(this, play)) - this->actor.shape.rot.x;
 
             if (this->actor.shape.rot.x > 0x4000 || this->actor.shape.rot.x < -0x4000) {
                 targetEyeIrisRotY = -(s16)(targetEyeIrisRotY + 0x8000);
@@ -1820,6 +1895,206 @@ void BossGoma_UpdateTailLimbsScale(BossGoma* this) {
     }
 }
 
+// OOT recomp fork: synced boss movement.
+// Each fight state is identified by its index in this table, so it means the same thing on every
+// player's game. When a remote player leads the fight, their state is applied here by calling the
+// matching Setup function (which starts the right animation) and then copying positions/timers.
+typedef void (*BossGomaSetupFunc)(BossGoma*);
+
+typedef struct {
+    BossGomaActionFunc action;
+    BossGomaSetupFunc setup;
+} BossGomaSyncAction;
+
+static const BossGomaSyncAction sBossGomaSyncActions[] = {
+    { BossGoma_FloorIdle, BossGoma_SetupFloorIdle },
+    { BossGoma_CeilingIdle, BossGoma_SetupCeilingIdle },
+    { BossGoma_FallJump, BossGoma_SetupFallJump },
+    { BossGoma_FallStruckDown, BossGoma_SetupFallStruckDown },
+    { BossGoma_CeilingSpawnGohmas, BossGoma_SetupCeilingSpawnGohmas },
+    { BossGoma_CeilingPrepareSpawnGohmas, BossGoma_SetupCeilingPrepareSpawnGohmas },
+    { BossGoma_WallClimb, BossGoma_SetupWallClimb },
+    { BossGoma_CeilingMoveToCenter, BossGoma_SetupCeilingMoveToCenter },
+    { BossGoma_FloorMain, BossGoma_SetupFloorMain },
+    { BossGoma_FloorLand, BossGoma_SetupFloorLand },
+    { BossGoma_FloorLandStruckDown, BossGoma_SetupFloorLandStruckDown },
+    { BossGoma_FloorStunned, BossGoma_SetupFloorStunned },
+    { BossGoma_FloorAttackPosture, BossGoma_SetupFloorAttackPosture },
+    { BossGoma_FloorPrepareAttack, BossGoma_SetupFloorPrepareAttack },
+    { BossGoma_FloorAttack, BossGoma_SetupFloorAttack },
+    { BossGoma_FloorDamaged, BossGoma_SetupFloorDamaged },
+};
+
+// Index of the current fight state, or -1 during the intro, the death scene, or anything unknown
+static s16 BossGoma_GetSyncActionIndex(BossGoma* this) {
+    s16 i;
+
+    for (i = 0; i < ARRAY_COUNT(sBossGomaSyncActions); i++) {
+        if (sBossGomaSyncActions[i].action == this->actionFunc) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static s32 BossGoma_IsSyncable(BossGoma* this) {
+    return !this->disableGameplayLogic && BossGoma_GetSyncActionIndex(this) >= 0;
+}
+
+static void BossGoma_CaptureSyncState(BossGoma* this, SharedBossState* state) {
+    state->action = BossGoma_GetSyncActionIndex(this);
+    state->vars[0] = this->actionState;
+    state->vars[1] = this->timer;
+    state->vars[2] = this->framesUntilNextAction;
+    state->vars[3] = this->patienceTimer;
+    state->vars[4] = this->eyeClosedTimer;
+    state->vars[5] = this->invincibilityFrames;
+    state->vars[6] = this->spawnGohmasActionTimer;
+    state->vars[7] = this->frameCount;
+    state->pos[0] = this->actor.world.pos.x;
+    state->pos[1] = this->actor.world.pos.y;
+    state->pos[2] = this->actor.world.pos.z;
+    state->rot[0] = this->actor.world.rot.x;
+    state->rot[1] = this->actor.world.rot.y;
+    state->rot[2] = this->actor.world.rot.z;
+    state->shapeRot[0] = this->actor.shape.rot.x;
+    state->shapeRot[1] = this->actor.shape.rot.y;
+    state->shapeRot[2] = this->actor.shape.rot.z;
+    state->speedXZ = this->actor.speedXZ;
+    state->velocityY = this->actor.velocity.y;
+    state->gravity = this->actor.gravity;
+    state->animFrame = this->skelanime.curFrame;
+
+    // Babies
+    state->minionCount = CLAMP(this->childGohmaCount, 0, SHARED_BOSS_MAX_MINIONS);
+    for (s16 i = 0; i < state->minionCount; i++) {
+        SharedBossMinion* minion = &state->minions[i];
+
+        minion->state = this->childrenGohmaState[i];
+        minion->action = -1;
+        if (minion->state > 0 && this->childActors[i] != NULL) {
+            EnGoma_SyncCapture((EnGoma*)this->childActors[i], minion);
+        }
+    }
+}
+
+// Makes this game's babies match the leader's: spawns the ones they have, kills the ones that
+// died there, and copies where each one is and what it's doing.
+static void BossGoma_ApplyChildrenSync(BossGoma* this, PlayState* play, const SharedBossState* state) {
+    this->childGohmaCount = CLAMP(state->minionCount, 3, BOSSGOMA_MAX_CHILDREN);
+
+    for (s16 i = 0; i < BOSSGOMA_MAX_CHILDREN; i++) {
+        s16 leaderState = (i < state->minionCount) ? state->minions[i].state : 0;
+        const SharedBossMinion* minion = &state->minions[i];
+        EnGoma* child = (EnGoma*)this->childActors[i];
+
+        if (leaderState > 0) {
+            if (child == NULL && this->childrenGohmaState[i] == 0) {
+                // The leader's Gohma laid this egg: lay ours in the same place
+                this->childActors[i] =
+                    Actor_SpawnAsChild(&play->actorCtx, &this->actor, play, ACTOR_EN_GOMA, minion->pos[0],
+                                       minion->pos[1], minion->pos[2], 0, minion->rotY, 0, i % 3);
+                this->childrenGohmaState[i] = (this->childActors[i] != NULL) ? 1 : 0;
+            } else if (child != NULL && minion->action >= 0) {
+                EnGoma_SyncApply(child, play, minion);
+            }
+        } else if (leaderState < 0) {
+            if (child != NULL) {
+                EnGoma_SyncKill(child); // dies properly; its slot is marked dead when it's gone
+            } else {
+                this->childrenGohmaState[i] = -1;
+            }
+        } else if (this->childrenGohmaState[i] < 0) {
+            // The leader started a new wave
+            this->childrenGohmaState[i] = 0;
+        }
+    }
+}
+
+static void BossGoma_ApplySyncState(BossGoma* this, const SharedBossState* state) {
+    if (state->action < 0 || state->action >= ARRAY_COUNT(sBossGomaSyncActions)) {
+        return;
+    }
+
+    if (sBossGomaSyncActions[state->action].action != this->actionFunc) {
+        sBossGomaSyncActions[state->action].setup(this);
+    }
+
+    this->actionState = state->vars[0];
+    this->timer = state->vars[1];
+    this->framesUntilNextAction = state->vars[2];
+    this->patienceTimer = state->vars[3];
+    this->eyeClosedTimer = state->vars[4];
+    this->invincibilityFrames = state->vars[5];
+    this->spawnGohmasActionTimer = state->vars[6];
+    this->frameCount = state->vars[7];
+    this->actor.world.pos.x = state->pos[0];
+    this->actor.world.pos.y = state->pos[1];
+    this->actor.world.pos.z = state->pos[2];
+    this->actor.world.rot.x = state->rot[0];
+    this->actor.world.rot.y = state->rot[1];
+    this->actor.world.rot.z = state->rot[2];
+    this->actor.shape.rot.x = state->shapeRot[0];
+    this->actor.shape.rot.y = state->shapeRot[1];
+    this->actor.shape.rot.z = state->shapeRot[2];
+    this->actor.speedXZ = state->speedXZ;
+    this->actor.velocity.y = state->velocityY;
+    this->actor.gravity = state->gravity;
+    if (state->animFrame >= 0.0f && state->animFrame <= this->skelanime.endFrame) {
+        this->skelanime.curFrame = state->animFrame;
+    }
+}
+
+// Applies hits other players made and, if another player leads, copies their boss
+static void BossGoma_ReceiveSync(BossGoma* this, PlayState* play) {
+    SharedBossState state;
+
+    if (!BossGoma_IsSyncable(this)) {
+        this->isSyncFollower = false;
+        return;
+    }
+    s16 killed;
+
+    // Babies other players killed
+    while ((killed = SharedBoss_PopMinionKilled(&this->actor)) >= 0) {
+        if (killed < BOSSGOMA_MAX_CHILDREN && this->childActors[killed] != NULL) {
+            EnGoma_SyncKill((EnGoma*)this->childActors[killed]);
+        }
+    }
+
+    while (SharedBoss_PopEvent(&this->actor, &state)) {
+        BossGoma_ApplySyncState(this, &state);
+    }
+
+    this->isSyncFollower = SharedBoss_GetLeaderState(&this->actor, &state);
+    if (this->isSyncFollower) {
+        BossGoma_ApplySyncState(this, &state);
+        BossGoma_ApplyChildrenSync(this, play, &state);
+    }
+}
+
+// Sends this frame's state so other players can follow it (or elect us as leader)
+static void BossGoma_SendSync(BossGoma* this) {
+    SharedBossState state;
+
+    if (!BossGoma_IsSyncable(this)) {
+        return;
+    }
+    BossGoma_CaptureSyncState(this, &state);
+    SharedBoss_SendState(&this->actor, &state);
+}
+
+// A local hit changed Gohma's state: tell everyone so all copies react together
+static void BossGoma_SendHitEvent(BossGoma* this) {
+    SharedBossState state;
+
+    if (!BossGoma_IsSyncable(this)) {
+        return;
+    }
+    BossGoma_CaptureSyncState(this, &state);
+    SharedBoss_SendEvent(&this->actor, &state);
+}
+
 void BossGoma_UpdateHit(BossGoma* this, PlayState* play) {
     if (this->invincibilityFrames != 0) {
         this->invincibilityFrames--;
@@ -1835,14 +2110,17 @@ void BossGoma_UpdateHit(BossGoma* this, PlayState* play) {
                 this->actionFunc == BossGoma_CeilingPrepareSpawnGohmas) {
                 BossGoma_SetupFallStruckDown(this);
                 Audio_PlayActorSound2(&this->actor, NA_SE_EN_GOMA_DAM2);
+                BossGoma_SendHitEvent(this); // OOT recomp fork
             } else if (this->actionFunc == BossGoma_FloorStunned &&
                        (damage = CollisionCheck_GetSwordDamage(acHitInfo->toucher.dmgFlags, play)) != 0) {
                 this->actor.colChkInfo.health -= damage;
+                SharedBoss_ReportHealth(&this->actor, (s8)this->actor.colChkInfo.health); // OOT recomp fork
 
                 if ((s8)this->actor.colChkInfo.health > 0) {
                     Audio_PlayActorSound2(&this->actor, NA_SE_EN_GOMA_DAM1);
                     BossGoma_SetupFloorDamaged(this);
                     EffectSsSibuki_SpawnBurst(play, &this->actor.focus.pos);
+                    BossGoma_SendHitEvent(this); // OOT recomp fork
                 } else {
                     BossGoma_SetupDefeated(this, play);
                     Enemy_StartFinishingBlow(play, &this->actor);
@@ -1866,6 +2144,7 @@ void BossGoma_UpdateHit(BossGoma* this, PlayState* play) {
 
                 this->timer = 4;
                 Actor_RequestQuakeAndRumble(&this->actor, play, 4, 0xC);
+                BossGoma_SendHitEvent(this); // OOT recomp fork
             }
         }
     }
@@ -1913,6 +2192,48 @@ void BossGoma_UpdateEyeEnvColor(BossGoma* this) {
     Math_ApproachF(&this->eyeEnvColor[2], targetEyeEnvColors[this->visualState][2], 0.5f, 20.0f);
 }
 
+// OOT recomp fork: shared boss fights.
+// Lowers this Gohma to the health other players in the room have reported. If they've
+// defeated it, it dies here too - straight away if it's on the floor, otherwise it's knocked
+// off the ceiling first and dies once it lands.
+static s32 BossGoma_IsOnFloor(BossGoma* this) {
+    return this->actionFunc == BossGoma_FloorIdle || this->actionFunc == BossGoma_FloorMain ||
+           this->actionFunc == BossGoma_FloorAttackPosture || this->actionFunc == BossGoma_FloorPrepareAttack ||
+           this->actionFunc == BossGoma_FloorAttack || this->actionFunc == BossGoma_FloorDamaged ||
+           this->actionFunc == BossGoma_FloorStunned || this->actionFunc == BossGoma_FloorLand ||
+           this->actionFunc == BossGoma_FloorLandStruckDown;
+}
+
+static void BossGoma_ApplySharedHealth(BossGoma* this, PlayState* play) {
+    s32 sharedHealth = SharedBoss_GetSharedHealth(&this->actor);
+
+    if (sharedHealth < 0 || this->actionFunc == BossGoma_Encounter || this->actionFunc == BossGoma_Defeated) {
+        return;
+    }
+    if ((s8)this->actor.colChkInfo.health <= sharedHealth) {
+        return;
+    }
+
+    if (sharedHealth > 0) {
+        this->actor.colChkInfo.health = sharedHealth;
+        Audio_PlayActorSound2(&this->actor, NA_SE_EN_GOMA_DAM1);
+        this->invincibilityFrames = 10;
+    } else if (BossGoma_IsOnFloor(this)) {
+        this->actor.colChkInfo.health = 0;
+        BossGoma_SetupDefeated(this, play);
+        Enemy_StartFinishingBlow(play, &this->actor);
+        GameInteractor_ExecuteOnBossDefeat(&this->actor);
+    } else {
+        // Keep it alive until it's back on the floor so the death animation plays properly
+        this->actor.colChkInfo.health = 1;
+        if (this->actionFunc == BossGoma_CeilingMoveToCenter || this->actionFunc == BossGoma_CeilingIdle ||
+            this->actionFunc == BossGoma_CeilingPrepareSpawnGohmas) {
+            BossGoma_SetupFallStruckDown(this);
+            Audio_PlayActorSound2(&this->actor, NA_SE_EN_GOMA_DAM2);
+        }
+    }
+}
+
 void BossGoma_Update(Actor* thisx, PlayState* play) {
     BossGoma* this = (BossGoma*)thisx;
     s32 pad;
@@ -1933,6 +2254,7 @@ void BossGoma_Update(Actor* thisx, PlayState* play) {
     }
 
     this->eyeState = EYESTATE_IRIS_FOLLOW_BONUS_IFRAMES;
+    BossGoma_ReceiveSync(this, play); // OOT recomp fork
     this->actionFunc(this, play);
     this->actor.shape.rot.y = this->actor.world.rot.y;
 
@@ -1954,6 +2276,7 @@ void BossGoma_Update(Actor* thisx, PlayState* play) {
     BossGoma_UpdateTailLimbsScale(this);
 
     if (!this->disableGameplayLogic) {
+        BossGoma_ApplySharedHealth(this, play); // OOT recomp fork
         BossGoma_UpdateHit(this, play);
         CollisionCheck_SetAC(play, &play->colChkCtx, &this->collider.base);
         CollisionCheck_SetOC(play, &play->colChkCtx, &this->collider.base);
@@ -1963,6 +2286,8 @@ void BossGoma_Update(Actor* thisx, PlayState* play) {
             CollisionCheck_SetAT(play, &play->colChkCtx, &this->collider.base);
         }
     }
+
+    BossGoma_SendSync(this); // OOT recomp fork
 }
 
 s32 BossGoma_OverrideLimbDraw(PlayState* play, s32 limbIndex, Gfx** dList, Vec3f* pos, Vec3s* rot, void* thisx) {
@@ -2185,8 +2510,13 @@ void BossGoma_Draw(Actor* thisx, PlayState* play) {
 }
 
 void BossGoma_SpawnChildGohma(BossGoma* this, PlayState* play, s16 i) {
-    Actor_SpawnAsChild(&play->actorCtx, &this->actor, play, ACTOR_EN_GOMA, this->lastTailLimbWorldPos.x,
-                       this->lastTailLimbWorldPos.y - 50.0f, this->lastTailLimbWorldPos.z, 0, i * (0x10000 / 3), 0, i);
+    // OOT recomp fork: more than 3 babies are possible. Params stay below 3 (that's what marks a
+    // baby as "spawned by the boss"), and the real slot is remembered in childActors.
+    s16 count = CLAMP(this->childGohmaCount, 1, BOSSGOMA_MAX_CHILDREN);
+
+    this->childActors[i] = Actor_SpawnAsChild(&play->actorCtx, &this->actor, play, ACTOR_EN_GOMA,
+                                              this->lastTailLimbWorldPos.x, this->lastTailLimbWorldPos.y - 50.0f,
+                                              this->lastTailLimbWorldPos.z, 0, i * (0x10000 / count), 0, i % 3);
 
     this->childrenGohmaState[i] = 1;
 }

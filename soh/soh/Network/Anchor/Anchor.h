@@ -3,6 +3,7 @@
 #ifdef __cplusplus
 
 #include "soh/Network/Network.h"
+#include "soh/Network/Anchor/SharedBoss.h"
 #include <libultraship/bridge/consolevariablebridge.h>
 #include <ship/window/gui/GuiWindow.h>
 #include <spdlog/spdlog.h>
@@ -58,6 +59,17 @@ typedef struct {
     f32 ocarinaModulator;
     s8 ocarinaBend;
 
+    // OOT recomp fork: extra equipment info so other players' gear draws correctly
+    // equipment = gSaveContext.equips.equipment (which sword/shield/tunic/boots is equipped),
+    // upgrades = gSaveContext.inventory.upgrades (strength = which gauntlets),
+    // swordHealth = Giant's Knife breaks at 0,
+    // appliedModelKey = what the dummy's hand/sheath models were last built from
+    s8 currentMask;
+    u16 equipment;
+    u32 upgrades;
+    u16 swordHealth;
+    u32 appliedModelKey;
+
     // Ptr to the dummy player
     Player* player;
 } AnchorClient;
@@ -89,6 +101,9 @@ class Anchor : public Network {
     void SetDummyPlayerClientId(const Actor* actor, uint32_t clientId);
 
     void HandlePacket_AllClientState(nlohmann::json payload);
+    void HandlePacket_BossHealth(nlohmann::json payload);
+    void HandlePacket_BossState(nlohmann::json payload);
+    void HandlePacket_BossMinionKilled(nlohmann::json payload);
     void HandlePacket_ConsumeAdultTradeItem(nlohmann::json payload);
     void HandlePacket_DamagePlayer(nlohmann::json payload);
     void HandlePacket_DisableAnchor(nlohmann::json payload);
@@ -117,6 +132,10 @@ class Anchor : public Network {
 
     // Packet types //
     inline static const std::string ALL_CLIENT_STATE = "ALL_CLIENT_STATE";
+    // OOT recomp fork
+    inline static const std::string BOSS_HEALTH = "BOSS_HEALTH";
+    inline static const std::string BOSS_STATE = "BOSS_STATE";
+    inline static const std::string BOSS_MINION_KILLED = "BOSS_MINION_KILLED";
     inline static const std::string DAMAGE_PLAYER = "DAMAGE_PLAYER";
     inline static const std::string DISABLE_ANCHOR = "DISABLE_ANCHOR";
     inline static const std::string ENTRANCE_DISCOVERED = "ENTRANCE_DISCOVERED";
@@ -153,9 +172,16 @@ class Anchor : public Network {
     void ProcessIncomingPacketQueue();
     void SendJsonToRemote(nlohmann::json packet);
     bool IsSaveLoaded();
+    // OOT recomp fork: false when items & flags shouldn't be shared, either because the room
+    // has syncing turned off or because this player turned on Instanced Items.
+    bool ShouldSyncItemsAndFlags();
     bool CanTeleportTo(uint32_t clientId);
     uint32_t GetDummyPlayerClientId(const Actor* actor);
 
+    // OOT recomp fork
+    void SendPacket_BossHealth(s16 actorId, s32 health);
+    void SendPacket_BossState(s16 actorId, const SharedBossState& state, bool isEvent);
+    void SendPacket_BossMinionKilled(s16 actorId, s16 index);
     void SendPacket_ClearTeamState(std::string teamId);
     void SendPacket_DamagePlayer(u32 clientId, u8 damageEffect, u8 damage);
     void SendPacket_EntranceDiscovered(u16 entranceIndex);
